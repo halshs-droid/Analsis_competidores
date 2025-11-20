@@ -155,3 +155,358 @@
             font-size: 28px;
             font-weight: bold;
             cursor: pointer;
+        }
+
+        .close-button:hover,
+        .close-button:focus {
+            color: var(--color-text);
+            text-decoration: none;
+        }
+
+        /* Responsividad */
+        @media (max-width: 768px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Análisis Comparativo de Competidores (v2)</h1>
+        <p>Dashboard Interactivo y Dinámico. Ajuste los pesos para recalcular los puntajes totales, incluyendo la Puntuación Base.</p>
+    </header>
+
+    <div class="dashboard-container">
+        <div class="controls-panel">
+            <h2>⚙️ Controles de Ponderación y Filtro</h2>
+            
+            <div class="control-group">
+                <h3>Ajustar Pesos (%)</h3>
+                <label for="weight_redes">Redes Sociales (<span id="value_redes" class="slider-value">25%</span>)</label>
+                <input type="range" id="weight_redes" min="0" max="100" value="25" oninput="updateDashboard()">
+
+                <label for="weight_edificaciones">Edificaciones (<span id="value_edificaciones" class="slider-value">25%</span>)</label>
+                <input type="range" id="weight_edificaciones" min="0" max="100" value="25" oninput="updateDashboard()">
+
+                <label for="weight_mercado">Tipos de Mercado (<span id="value_mercado" class="slider-value">25%</span>)</label>
+                <input type="range" id="weight_mercado" min="0" max="100" value="25" oninput="updateDashboard()">
+
+                <label for="weight_base">**Puntuación Base (Desempate)** (<span id="value_base" class="slider-value">25%</span>)</label>
+                <input type="range" id="weight_base" min="0" max="100" value="25" oninput="updateDashboard()">
+            </div>
+            
+            <hr>
+
+            <div class="control-group">
+                <h3>Seleccionar Proveedores para Comparación (Radar)</h3>
+                <div id="multiselect_proveedores" class="multiselect">
+                    </div>
+            </div>
+
+            <button onclick="openRadarModal()" style="width: 100%; padding: 10px; background-color: var(--color-primary); color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">
+                Ver Comparación Radar Ampliada
+            </button>
+        </div>
+
+        <div class="main-content">
+            
+            <div class="chart-box">
+                <h2>🏆 Ranking de Proveedores (Puntaje Total Ponderado)</h2>
+                <canvas id="barChart"></canvas>
+            </div>
+
+            <div class="summary-box">
+                <h2>📈 Estadísticas Agregadas (Basado en Puntuación Normalizada)</h2>
+                <div id="stats_summary">
+                    </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <div id="radarModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="closeRadarModal()">&times;</span>
+            <h2>Gráfico Radar: Comparación Multicriterio</h2>
+            <canvas id="radarChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Datos del archivo CSV normalizados y con puntuaciones
+        const data = [
+            // score_base = score_redes (4) + score_edificaciones (3) + score_mercado (4) = 11
+            { empresa: "Yohersa", productos_count: 9, ano_inicio: 1960, 
+              score_redes: 4, score_edificaciones: 3, score_mercado: 4, score_base: 11 }, 
+            // score_base = 4 + 3 + 2 = 9
+            { empresa: "Covema", productos_count: 10, ano_inicio: 2003, 
+              score_redes: 4, score_edificaciones: 3, score_mercado: 2, score_base: 9 },
+            // score_base = 1 + 2 + 2 = 5
+            { empresa: "Javisac", productos_count: 6, ano_inicio: 2006, 
+              score_redes: 1, score_edificaciones: 2, score_mercado: 2, score_base: 5 },
+            // score_base = 1 + 2 + 1 = 4 (Corregido, el puntaje base debe ser 4 según scores 1/2/1)
+            { empresa: "Aceros Flovicsa", productos_count: 4, ano_inicio: 2008, 
+              score_redes: 1, score_edificaciones: 2, score_mercado: 1, score_base: 4 }, 
+            // score_base = 1 + 2 + 1 = 4
+            { empresa: "Aceros Ugartesa", productos_count: 4, ano_inicio: 2013, 
+              score_redes: 1, score_edificaciones: 2, score_mercado: 1, score_base: 4 }
+        ];
+        
+        // Máximos Puntajes para normalización en Gráfico Radar y Ponderación
+        const MAX_SCORE = {
+            redes: 4,
+            edificaciones: 4,
+            mercado: 6,
+            base: 14 // Máximo posible: 4 (Redes) + 4 (Edificaciones) + 6 (Mercado)
+        };
+
+        let barChart;
+        let radarChart;
+
+        // Paleta de colores pasteles
+        const PASTE_COLORS = [
+            'rgba(173, 216, 230, 0.8)', // Azul Claro
+            'rgba(255, 179, 186, 0.8)', // Rosa Claro
+            'rgba(193, 225, 193, 0.8)', // Verde Menta
+            'rgba(255, 223, 186, 0.8)', // Naranja Pálido
+            'rgba(255, 255, 179, 0.8)'  // Amarillo Claro
+        ];
+
+        const PASTE_BORDER_COLORS = [
+            'rgba(173, 216, 230, 1)',
+            'rgba(255, 179, 186, 1)',
+            'rgba(193, 225, 193, 1)',
+            'rgba(255, 223, 186, 1)',
+            'rgba(255, 255, 179, 1)'
+        ];
+
+        // --- Funciones de Inicialización y Cálculo ---
+
+        function initMultiselect() {
+            const container = document.getElementById('multiselect_proveedores');
+            data.forEach((item, index) => {
+                const label = document.createElement('label');
+                label.innerHTML = `
+                    <input type="checkbox" name="proveedor_select" value="${item.empresa}" onchange="updateDashboard()" ${index < 2 ? 'checked' : ''}>
+                    ${item.empresa}
+                `;
+                container.appendChild(label);
+            });
+        }
+
+        function calculateScores(data) {
+            // Obtener pesos
+            const w_redes = parseFloat(document.getElementById('weight_redes').value);
+            const w_edificaciones = parseFloat(document.getElementById('weight_edificaciones').value);
+            const w_mercado = parseFloat(document.getElementById('weight_mercado').value);
+            const w_base = parseFloat(document.getElementById('weight_base').value);
+
+            // Normalizar todos los pesos para que sumen 100
+            const total_weight = w_redes + w_edificaciones + w_mercado + w_base;
+            const norm_w_redes = w_redes / total_weight;
+            const norm_w_edificaciones = w_edificaciones / total_weight;
+            const norm_w_mercado = w_mercado / total_weight;
+            const norm_w_base = w_base / total_weight;
+
+            // Actualizar display de valores
+            document.getElementById('value_redes').textContent = `${(norm_w_redes * 100).toFixed(0)}%`;
+            document.getElementById('value_edificaciones').textContent = `${(norm_w_edificaciones * 100).toFixed(0)}%`;
+            document.getElementById('value_mercado').textContent = `${(norm_w_mercado * 100).toFixed(0)}%`;
+            document.getElementById('value_base').textContent = `${(norm_w_base * 100).toFixed(0)}%`;
+
+            // Calcular puntaje total ponderado (normalizado a 100)
+            return data.map(item => {
+                // Ponderación de los 3 criterios principales (cada uno normalizado a 100)
+                const score_principal = 
+                    (item.score_redes / MAX_SCORE.redes) * norm_w_redes * 100 + 
+                    (item.score_edificaciones / MAX_SCORE.edificaciones) * norm_w_edificaciones * 100 + 
+                    (item.score_mercado / MAX_SCORE.mercado) * norm_w_mercado * 100;
+                
+                // Ponderación del puntaje base (normalizado a 100)
+                const score_desempate = (item.score_base / MAX_SCORE.base) * norm_w_base * 100;
+
+                const total_score = score_principal + score_desempate;
+
+                return { ...item, total_score: parseFloat(total_score.toFixed(2)) };
+            }).sort((a, b) => b.total_score - a.total_score); // Ordenar por puntaje total
+        }
+
+        function initBarChart(rankedData) {
+            const ctx = document.getElementById('barChart').getContext('2d');
+            
+            const labels = rankedData.map(d => d.empresa);
+            const scores = rankedData.map(d => d.total_score);
+
+            if (barChart) {
+                barChart.destroy();
+            }
+
+            barChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Puntaje Total Ponderado (Máx. 100)',
+                        data: scores,
+                        backgroundColor: PASTE_COLORS.slice(0, rankedData.length),
+                        borderColor: PASTE_BORDER_COLORS.slice(0, rankedData.length),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: true, text: 'Puntaje Total Ponderado con Criterio de Desempate', font: { size: 14 } },
+                        datalabels: { enabled: false } // Deshabilitar datalabels por defecto en bar chart
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: { display: true, text: 'Puntaje Total (pts)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function initRadarChart(selectedData, chartId) {
+            const ctx = document.getElementById(chartId).getContext('2d');
+            
+            if (chartId === 'radarChart' && radarChart) {
+                radarChart.destroy();
+            }
+
+            const datasets = selectedData.map((item, index) => {
+                // Normalizar todos los puntajes a una escala de 0 a 100 para visualización en el radar
+                return {
+                    label: item.empresa,
+                    data: [
+                        (item.score_redes / MAX_SCORE.redes) * 100,
+                        (item.score_edificaciones / MAX_SCORE.edificaciones) * 100,
+                        (item.score_mercado / MAX_SCORE.mercado) * 100,
+                        (item.score_base / MAX_SCORE.base) * 100, // Nuevo eje: Puntaje Base
+                        item.total_score // Puntaje Ponderado Final (Max 100)
+                    ],
+                    backgroundColor: PASTE_COLORS[index % PASTE_COLORS.length].replace('0.8', '0.2'), 
+                    borderColor: PASTE_BORDER_COLORS[index % PASTE_COLORS.length].replace('0.8', '1'),
+                    pointBackgroundColor: PASTE_BORDER_COLORS[index % PASTE_COLORS.length].replace('0.8', '1'),
+                    pointBorderColor: '#fff',
+                    borderWidth: 2
+                };
+            });
+
+            radarChart = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['Redes Sociales', 'Edificaciones', 'Tipos de Mercado', 'Puntuación Base', 'Puntaje Ponderado Final'],
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: { callbacks: { label: (context) => context.dataset.label + ': ' + context.formattedValue + '%' } }
+                    },
+                    scales: {
+                        r: {
+                            angleLines: { color: '#ccc' },
+                            grid: { color: '#eee' },
+                            pointLabels: { font: { size: 12 } },
+                            suggestedMin: 0,
+                            suggestedMax: 100,
+                            ticks: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateStatsSummary(rankedData) {
+            const summaryDiv = document.getElementById('stats_summary');
+            let html = '';
+
+            // Calcular promedio y desviación estándar del score total
+            const scores = rankedData.map(d => d.total_score);
+            const avg = scores.reduce((sum, val) => sum + val, 0) / scores.length;
+            const variance = scores.map(s => Math.pow(s - avg, 2)).reduce((sum, val) => sum + val, 0) / scores.length;
+            const stdDev = Math.sqrt(variance);
+
+            // Calcular mejor y peor desempeño por criterio
+            const bestRedes = rankedData.reduce((prev, curr) => (prev.score_redes > curr.score_redes) ? prev : curr);
+            const bestBase = rankedData.reduce((prev, curr) => (prev.score_base > curr.score_base) ? prev : curr);
+            
+            html += `
+                <p><strong>Puntaje Total Ponderado (incluyendo Desempate):</strong></p>
+                <ul>
+                    <li>**Promedio General:** ${avg.toFixed(2)} pts</li>
+                    <li>**Desviación Estándar:** ${stdDev.toFixed(2)} pts</li>
+                    <li>**Líder Actual (Ponderado):** ${rankedData[0].empresa} (${rankedData[0].total_score} pts)</li>
+                    <li>**Último Lugar (Ponderado):** ${rankedData[rankedData.length - 1].empresa} (${rankedData[rankedData.length - 1].total_score} pts)</li>
+                </ul>
+                <p><strong>Puntajes de Referencia:</strong></p>
+                <ul>
+                    <li>**Mejor Puntuación Base (Suma Simple):** ${bestBase.empresa} (${bestBase.score_base} / ${MAX_SCORE.base})</li>
+                    <li>**Mejor Cobertura en Redes Sociales:** ${bestRedes.empresa} (${bestRedes.score_redes} / ${MAX_SCORE.redes})</li>
+                </ul>
+            `;
+            summaryDiv.innerHTML = html;
+        }
+
+        function getSelectedProviders() {
+            const checkboxes = document.querySelectorAll('#multiselect_proveedores input[type="checkbox"]:checked');
+            const selectedNames = Array.from(checkboxes).map(cb => cb.value);
+            return data.filter(d => selectedNames.includes(d.empresa));
+        }
+
+        // --- Función Principal de Actualización ---
+
+        function updateDashboard() {
+            const rankedData = calculateScores(data);
+            initBarChart(rankedData);
+            updateStatsSummary(rankedData);
+            
+            // Actualizar la versión en el modal para que esté lista
+            const selectedProviders = getSelectedProviders();
+            if (selectedProviders.length > 0) {
+                initRadarChart(selectedProviders, 'radarChart');
+            } else {
+                if (radarChart) radarChart.destroy();
+            }
+        }
+
+        // --- Funciones del Modal ---
+
+        function openRadarModal() {
+            const selectedProviders = getSelectedProviders();
+            if (selectedProviders.length < 1) {
+                alert("Por favor, selecciona al menos un proveedor para la comparación.");
+                return;
+            }
+            // El gráfico ya está actualizado por updateDashboard, solo se muestra el modal
+            document.getElementById('radarModal').style.display = 'block';
+        }
+
+        function closeRadarModal() {
+            document.getElementById('radarModal').style.display = 'none';
+        }
+
+        // Ejecutar en la carga
+        window.onload = () => {
+            initMultiselect();
+            updateDashboard();
+        };
+
+        // Cerrar modal al hacer clic fuera de él
+        window.onclick = function(event) {
+            if (event.target == document.getElementById('radarModal')) {
+                closeRadarModal();
+            }
+        }
+    </script>
+</body>
+</html>
